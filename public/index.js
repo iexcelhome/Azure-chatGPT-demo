@@ -5,6 +5,17 @@ const messageInput = document.querySelector('#message-input');
 const tokensSpan = document.querySelector('#tokens');
 const exportExcel = document.querySelector('#export-excel');
 
+// get and set page title and header h1 text from /api/app-name
+const pageTitle = document.querySelector('title');
+const headerH1 = document.querySelector('#header h1');
+// /api/app-name will return the app name from .env file
+fetch('/api/app_name')
+    .then(response => response.text())
+    .then(appName => {
+        pageTitle.innerText = appName;
+        headerH1.innerText = appName;
+    });
+
 // 获取模态对话框元素和触发器元素
 const modal = document.querySelector('.modal');
 const usernameLabel = document.querySelector('#username-label');
@@ -124,12 +135,36 @@ fetch('/api/prompt_repo')
 
 
 // Add message to DOM
-const addMessage = (sender, message) => {
+const addMessage = (sender, message, messageId) => {
     const messageElement = document.createElement('div');
     messageElement.classList.add('message');
     messageElement.classList.add(`${sender}-message`);
     messageElement.dataset.message = message;
     messageElement.dataset.sender = sender;
+    messageElement.dataset.messageId = messageId;
+
+    //add fa-comments icon to message with class message-conversation and fas fa-comments
+    const conversationElement = document.createElement('i');
+    conversationElement.classList.add('message-conversation');
+    conversationElement.classList.add('fas');
+    conversationElement.classList.add('fa-quote-left');
+    messageElement.appendChild(conversationElement);
+
+    // if sender is not system
+    if (sender !== 'system') {
+        //add fa-trash icon to message with class message-delete and fas fa-trash
+        const deleteElement = document.createElement('i');
+        deleteElement.classList.add('message-delete');
+        deleteElement.classList.add('fas');
+        deleteElement.classList.add('fa-times');
+        messageElement.appendChild(deleteElement);
+        //add onclick event listener to deleteElement
+        deleteElement.addEventListener('click', () => {
+            // get the message id from messageElement's dataset
+            const messageId = messageElement.dataset.messageId;
+            deleteMessage(messageId);
+        });
+    }
 
     //if send is user
     if (sender === 'user') {
@@ -137,7 +172,13 @@ const addMessage = (sender, message) => {
         pre.innerText = message;
         messageElement.appendChild(pre);
     } else {
-        messageElement.innerHTML = marked.parse(message);
+        // 将 Markdown 文本转换为 HTML
+        const messageHtml = marked.parse(message);
+        // 创建一个新的 DOM 元素
+        const messageHtmlElement = document.createElement('div');
+        // 将生成的 HTML 设置为新元素的 innerHTML
+        messageHtmlElement.innerHTML = messageHtml;
+        messageElement.appendChild(messageHtmlElement);
     }
 
     const iconGroup = document.createElement('div');
@@ -185,6 +226,15 @@ const addMessage = (sender, message) => {
 
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 };
+
+// implement deleteMessage function
+const deleteMessage = (messageId) => {
+    // remove message from DOM and also from prompt array by message id 
+    const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+    messageElement.remove();
+    prompts = prompts.filter(prompt => prompt.messageId !== messageId);
+    saveCurrentProfileMessages();
+}
 
 // implement attachMessageCopyEvent function
 const attachMessageCopyEvent = (messageCopy) => {
@@ -333,6 +383,10 @@ async function playMessage(speaker) {
     await Promise.all([playSentences()]);
 
 }
+// generate unique id
+const generateId = () => {
+    return Math.random().toString(36).slice(2, 10);
+};
 
 // Clear message input
 const clearMessage = () => {
@@ -351,15 +405,21 @@ const sendMessage = async (message = '') => {
     // if message look like: /system: xxx, then send xxx as system message
     if (message.startsWith('/system')) {
         message = message.replace('/system', '');
-        addMessage('system', message);
+        let messageId = generateId();
+        addMessage('system', message, messageId);
         prompts.splice(0, prompts.length);
-        prompts.push({ role: 'system', content: message });
+        prompts.push({ role: 'system', content: message, messageId: messageId });
         return;
     }
-    addMessage('user', message);
-    prompts.push({ role: 'user', content: message });
+    let messageId = generateId();
+    addMessage('user', message, messageId);
+    prompts.push({ role: 'user', content: message, messageId: messageId });
     saveCurrentProfileMessages();
-    const promptText = JSON.stringify(prompts);
+    // join prompts except the messageId field to a string
+    const promptText = JSON.stringify(prompts.map((p) => {
+        return { role: p.role, content: p.content };
+    }));
+
     console.log(promptText);
     messageInput.value = '';
 
@@ -393,10 +453,12 @@ const sendMessage = async (message = '') => {
                 prompts[0] = { role: 'system', content: currentProfile.prompt };
             }
         }
-        addMessage('assistant', data.message);
+        let messageId = generateId();
+        addMessage('assistant', data.message, messageId);
         saveCurrentProfileMessages();
     } catch (error) {
-        addMessage('assistant', error.message);
+        let messageId = generateId();
+        addMessage('assistant', error.message, messageId);
     }
 };
 
@@ -449,7 +511,11 @@ const saveCurrentProfileMessages = () => {
     messages.forEach(message => {
         // only save user and assistant messages
         if (message.dataset.sender === 'user' || message.dataset.sender === 'assistant') {
-            savedMessages.push({ role: message.dataset.sender, content: message.dataset.message });
+            if (message.dataset.messageId === 'undefined') {
+                savedMessages.push({ role: message.dataset.sender, content: message.dataset.message, messageId: generateId() });
+            } else {
+                savedMessages.push({ role: message.dataset.sender, content: message.dataset.message, messageId: message.dataset.messageId });
+            }
         }
     });
     localStorage.setItem(currentUsername + '_' + currentProfile.name, JSON.stringify(savedMessages));
@@ -462,16 +528,17 @@ function renderMenuList(data) {
     currentUsername = data.username;
     usernameLabel.textContent = currentUsername;
     currentProfile = profiles[0]; // set currentProfile to the first profile
-    prompts.push({ role: 'system', content: currentProfile.prompt });
-    addMessage('system', currentProfile.prompt);
+    let messageId = generateId();
+    prompts.push({ role: 'system', content: currentProfile.prompt, messageId: messageId });
+    addMessage('system', currentProfile.prompt, messageId);
 
     // read saved messages from local storage for current profile and current username
     const savedMessages = JSON.parse(localStorage.getItem(currentUsername + '_' + currentProfile.name) || '[]');
     savedMessages.forEach(message => {
-        addMessage(message.role, message.content);
+        addMessage(message.role, message.content, message.messageId);
     });
 
-    // load last 2 messages(max) from savedMessages to prompts: sender => role, message => content
+    // load last 2 messages(max) from savedMessages
     if (savedMessages.length > 2) {
         prompts.push(savedMessages[savedMessages.length - 2]);
         prompts.push(savedMessages[savedMessages.length - 1]);
@@ -514,12 +581,13 @@ function renderMenuList(data) {
             messagesContainer.innerHTML = '';
             // 清空 prompts 数组
             prompts.splice(0, prompts.length);
-            prompts.push({ role: 'system', content: currentProfile.prompt });
-            addMessage('system', currentProfile.prompt);
+            let messageId = generateId();
+            prompts.push({ role: 'system', content: currentProfile.prompt, messageId: messageId });
+            addMessage('system', currentProfile.prompt, messageId);
             // read saved messages from local storage for current profile and current username
             const savedMessages = JSON.parse(localStorage.getItem(currentUsername + '_' + currentProfile.name) || '[]');
             savedMessages.forEach(message => {
-                addMessage(message.role, message.content);
+                addMessage(message.role, message.content, message.messageId);
             });
 
             // load last 2 messages(max) from savedMessages to prompts: sender => role, message => content
