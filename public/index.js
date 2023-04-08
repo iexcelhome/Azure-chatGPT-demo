@@ -1,4 +1,3 @@
-const promptImpersonate = 'You are an AI assistant that helps people find information.';
 const aiProfile = document.querySelector('#ai-profile');
 const messagesContainer = document.querySelector('#messages');
 const messageForm = document.querySelector('#message-form');
@@ -17,22 +16,15 @@ const ttsContainer = document.querySelector('#tts-container');
 ttsContainer.style.display = 'none';
 
 const practiceMode = document.querySelector('#practice-mode');
-var ttsPracticeMode = false;
+const practiceModeIcon = document.querySelector('#practice-mode-icon');
+var ttsPracticeMode = false; // practice mode is off by default
 // add click event listener to practiceMode
 practiceMode.addEventListener('click', () => {
-    const practiceModeIcon = document.querySelector('#practice-mode-icon');
     // if ttsPracticeMode is false, then set it to true
     if (!ttsPracticeMode) {
-        ttsPracticeMode = true;
-        practiceMode.innerText = 'Practice Mode: On';
-        practiceModeIcon.classList.remove('fa-volume-off');
-        practiceModeIcon.classList.add('fa-volume-up');
+        turnOnPracticeMode();
     } else {
-        ttsPracticeMode = false;
-        practiceMode.innerText = 'Practice Mode: Off';
-        practiceModeIcon.classList.remove('fa-volume-up');
-        practiceModeIcon.classList.add('fa-volume-off');
-
+        turnOffPracticeMode();
         // reset all the speaker icon to fas fa-volume-off
         // so that if the speaker is broken, it will can be clicked again
         const speakerElements = document.querySelectorAll('.message-speaker');
@@ -100,10 +92,6 @@ const showToast = (message) => {
     }, 3000); // 3 秒后隐藏 Toast
 }
 
-
-const max_tokens = 4000;
-var currentProfile = null;
-
 // first load prompt repo from /api/prompt_repo it looks like this:
 // [  
 //     {  
@@ -119,10 +107,19 @@ var currentProfile = null;
 // to each menu item
 // when click, get the profile data
 const menuList = document.querySelector('#menu-list');
+let tokens = 0
+let prompts = [];
+const max_tokens = 4000;
+var currentProfile = null;
+
+
 fetch('/api/prompt_repo')
     .then(response => response.json())
     .then(data => {
         renderMenuList(data);
+    })
+    .catch(error => {
+        console.error('Error:', error);
     });
 
 
@@ -176,7 +173,7 @@ const addMessage = (sender, message) => {
     attachMessageSpeakerEvent(lastSpeaker);
 
     // Determine if the message should be played automatically
-    const autoPlay = ttsPracticeMode && sender === 'bot';
+    const autoPlay = ttsPracticeMode && sender === 'assistant';
     if (autoPlay) {
         playMessage(lastSpeaker);
     }
@@ -187,7 +184,6 @@ const addMessage = (sender, message) => {
     attachMessageCopyEvent(lastCopy);
 
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
-
 };
 
 // implement attachMessageCopyEvent function
@@ -206,7 +202,6 @@ const attachMessageCopyEvent = (messageCopy) => {
         }
     });
 
-    // 添加事件监听器
     clipboard.on('success', function (e) {
         showToast('copied successful');
     });
@@ -228,21 +223,35 @@ const attachMessageSpeakerEvent = (speaker) => {
     });
 }
 
-// 定义函数将文本变量分成最多160个单词的句子集合数组
+const turnOnPracticeMode = () => {
+    ttsPracticeMode = true;
+    practiceMode.innerText = 'Practice Mode: On';
+    practiceModeIcon.classList.remove('fa-volume-off');
+    practiceModeIcon.classList.add('fa-volume-up');
+}
+
+const turnOffPracticeMode = () => {
+    ttsPracticeMode = false;
+    practiceMode.innerText = 'Practice Mode: Off';
+    practiceModeIcon.classList.remove('fa-volume-up');
+    practiceModeIcon.classList.add('fa-volume-off');
+}
+
+// split message into sentences chunks with max 160 words each
 function splitMessage(message) {
     let sentenceArr = [];
     let words = message.split(" ");
     let sentence = "";
     let i = 0;
     while (i < words.length) {
-        // 将单词逐一添加到当前句子中
+        // if current sentence is empty, then add the first word to it
         if (sentence.length === 0) {
             sentence = words[i];
         } else {
             sentence = sentence + " " + words[i];
         }
         i++;
-        // 如果当前句子的单词数达到160个或到达文本结尾，则添加到句子集合中，并清空当前句子
+        // if current sentence is 160 words or it is the last word, then add it to sentenceArr
         if (sentence.split(" ").length === 160 || i === words.length) {
             sentenceArr.push(sentence);
             sentence = "";
@@ -302,7 +311,7 @@ async function playMessage(speaker) {
     let sentenceArr = splitMessage(message);
     console.log(sentenceArr);
 
-    // 循环播放句子集合中的每个句子
+    // play sentences chunk one by one
     const playSentences = async () => {
         for (let sentence of sentenceArr) {
             toggleSpeakerIcon(speaker);
@@ -325,17 +334,11 @@ async function playMessage(speaker) {
 
 }
 
-
-let tokens = 0
-let prompts = [{ role: 'system', content: promptImpersonate }];
-addMessage('system', promptImpersonate);
-
-
 // Clear message input
 const clearMessage = () => {
     messagesContainer.innerHTML = '';
     messageInput.value = '';
-    prompts.splice(0, prompts.length, { role: 'system', content: promptImpersonate });
+    prompts.splice(0, prompts.length, { role: 'system', content: currentProfile.prompt });
 };
 
 
@@ -355,6 +358,7 @@ const sendMessage = async (message = '') => {
     }
     addMessage('user', message);
     prompts.push({ role: 'user', content: message });
+    saveCurrentProfileMessages();
     const promptText = JSON.stringify(prompts);
     console.log(promptText);
     messageInput.value = '';
@@ -386,12 +390,13 @@ const sendMessage = async (message = '') => {
             // If tokens are over 80% of max_tokens, remove the first round conversation
             if (tokens > max_tokens * 0.8) {
                 prompts.splice(1, 2);
-                prompts[0] = { role: 'system', content: promptImpersonate };
+                prompts[0] = { role: 'system', content: currentProfile.prompt };
             }
         }
-        addMessage('bot', data.message);
+        addMessage('assistant', data.message);
+        saveCurrentProfileMessages();
     } catch (error) {
-        addMessage('bot', error.message);
+        addMessage('assistant', error.message);
     }
 };
 
@@ -402,12 +407,11 @@ messageForm.addEventListener('submit', (event) => {
     if (message) {
         sendMessage(message);
     }
+    messageInput.focus();
 });
 
-messageInput.focus();
 
-
-
+var currentUsername = '';
 // request /api/prompt_repo build queryString to transfer usernameInput value as username to server
 // it will return a json object with username and a data array
 // output the data array and the username in console
@@ -420,28 +424,65 @@ userForm.addEventListener('submit', (event) => {
             .then(response => response.json())
             .then(data => {
                 renderMenuList(data);
+                //practice mode will be off when user submit the username
+                turnOffPracticeMode();
             });
     }
 });
 
-// 当点击触发器时显示模态对话框
+// popup the modal when user click the username label
 usernameLabel.addEventListener('click', function () {
     modal.style.display = 'block';
 });
 
-// 当点击模态对话框外部时关闭模态对话框
+// close the modal when user click the close button
 document.addEventListener('click', function (event) {
     if (event.target == modal) {
         modal.style.display = "none";
     }
 });
 
+// save the current message content to local storage by username and profile name
+const saveCurrentProfileMessages = () => {
+    const messages = document.querySelectorAll('.message');
+    const savedMessages = [];
+    messages.forEach(message => {
+        // only save user and assistant messages
+        if (message.dataset.sender === 'user' || message.dataset.sender === 'assistant') {
+            savedMessages.push({ role: message.dataset.sender, content: message.dataset.message });
+        }
+    });
+    localStorage.setItem(currentUsername + '_' + currentProfile.name, JSON.stringify(savedMessages));
+};
+
 // render menu list from data
+// it only happens when user submit the username or the page is loaded
 function renderMenuList(data) {
     const profiles = data.profiles;
+    currentUsername = data.username;
+    usernameLabel.textContent = currentUsername;
+    currentProfile = profiles[0]; // set currentProfile to the first profile
+    prompts.push({ role: 'system', content: currentProfile.prompt });
+    addMessage('system', currentProfile.prompt);
+
+    // read saved messages from local storage for current profile and current username
+    const savedMessages = JSON.parse(localStorage.getItem(currentUsername + '_' + currentProfile.name) || '[]');
+    savedMessages.forEach(message => {
+        addMessage(message.role, message.content);
+    });
+
+    // load last 2 messages(max) from savedMessages to prompts: sender => role, message => content
+    if (savedMessages.length > 2) {
+        prompts.push(savedMessages[savedMessages.length - 2]);
+        prompts.push(savedMessages[savedMessages.length - 1]);
+    } else if
+        (savedMessages.length > 0) {
+        prompts.push(savedMessages[savedMessages.length - 1]);
+    }
+
     //empty menu list
     menuList.innerHTML = '';
-    usernameLabel.textContent = data.username;
+
     //add menu items
     profiles.forEach(item => {
         let li = document.createElement('li');
@@ -455,7 +496,9 @@ function renderMenuList(data) {
         menuList.appendChild(li);
         //add click event listener
         li.addEventListener('click', function () {
-            // 获取与该列表项关联的 profile 数据  
+            // reset practice mode
+            turnOffPracticeMode();
+            // change currentProfile
             var profileName = this.getAttribute('data-profile');
             currentProfile = profiles.find(function (p) { return p.name === profileName; });
             // 如果当前 profile 的 tts 属性为 enabled，则显示 ttsContainer
@@ -468,11 +511,25 @@ function renderMenuList(data) {
             }
             // 设置 profile 图标和名称
             aiProfile.innerHTML = `<i class="${currentProfile.icon}"></i> ${currentProfile.displayName}`;
-            // 显示 profile 数据  
-            addMessage('system', currentProfile.prompt);
+            messagesContainer.innerHTML = '';
             // 清空 prompts 数组
             prompts.splice(0, prompts.length);
             prompts.push({ role: 'system', content: currentProfile.prompt });
+            addMessage('system', currentProfile.prompt);
+            // read saved messages from local storage for current profile and current username
+            const savedMessages = JSON.parse(localStorage.getItem(currentUsername + '_' + currentProfile.name) || '[]');
+            savedMessages.forEach(message => {
+                addMessage(message.role, message.content);
+            });
+
+            // load last 2 messages(max) from savedMessages to prompts: sender => role, message => content
+            if (savedMessages.length > 2) {
+                prompts.push(savedMessages[savedMessages.length - 2]);
+                prompts.push(savedMessages[savedMessages.length - 1]);
+            } else if
+                (savedMessages.length > 0) {
+                prompts.push(savedMessages[savedMessages.length - 1]);
+            }
         });
     });
 }
